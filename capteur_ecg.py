@@ -6,7 +6,7 @@ import time
 from collections import deque
 
 # Configuration MQTT
-MQTT_BROKER = "192.168.18.133"
+MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
 MQTT_TOPIC = "ecg/data"
 
@@ -27,7 +27,7 @@ mqtt_client.loop_start()
 
 # Paramètres
 points_par_periode = 500
-nb_echantillons=10
+nb_echantillons=250
 duree_periode = 1.0
 t_current = np.linspace(0, duree_periode, points_par_periode)
 periode_compteur = 0
@@ -36,7 +36,7 @@ try:
     while True:
         # Générer la période ECG actuelle
         current_real = ecg_synthetique(t_current)
-        bruit = 0.05 * np.random.normal(size=current_real.shape)
+        bruit = 0.05 * np.random.normal(0, 0.05, len(signal))
         current_noisy = current_real + bruit
         
         # Échantillonnage: 5 points par période
