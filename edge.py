@@ -13,6 +13,16 @@ MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
 MQTT_TOPIC = "ecg/data"
 
+# ---------- Paramètres d'affichage ----------
+SAMPLE_RATE = 200  # 200 échantillons par seconde
+duree_periode = 1.0  # 1 seconde par cycle
+periodes_a_afficher = 5  # Afficher 5 cycles
+BUFFER_SIZE = int(SAMPLE_RATE * duree_periode * periodes_a_afficher)  # 200 * 1 * 5 = 1000
+
+# ---------- Échelle d'amplitude constante ----------
+AMPLITUDE_MIN = -0.8  # Minimum d'amplitude en mV
+AMPLITUDE_MAX = 1.8   # Maximum d'amplitude en mV
+
 # ---------- Load Trained LSTM Model + Scaler ----------
 print("Loading model and scaler...")
 model = load_model("ecg_lstm_model.h5", compile=False)
@@ -25,9 +35,10 @@ scaler_scale = np.load("scaler_scale.npy")[0]
 
 print(f"Model loaded! Sequence length: {sequence_length}")
 print(f"Scaler - Mean: {scaler_mean:.4f}, Scale: {scaler_scale:.4f}")
+print(f"Buffer size: {BUFFER_SIZE} samples ({periodes_a_afficher} cycles)")
+print(f"Amplitude scale fixed: [{AMPLITUDE_MIN}, {AMPLITUDE_MAX}] mV")
 
 # ---------- Data Buffer ----------
-BUFFER_SIZE = 250
 ecg_signal = deque(maxlen=BUFFER_SIZE)
 pred_signal = []
 data_lock = threading.Lock()
@@ -37,18 +48,32 @@ pred_lock = threading.Lock()
 for _ in range(BUFFER_SIZE):
     ecg_signal.append(0.0)
 
+# ---------- Time array for x-axis ----------
+# Créer un tableau de temps en secondes pour les 5 cycles
+t_buffer = np.linspace(0, duree_periode * periodes_a_afficher, BUFFER_SIZE)
+
 # ---------- Plot Setup ----------
 fig, ax = plt.subplots(figsize=(12, 4))
-line_real, = ax.plot([], [], color="red", label="Real ECG (200 samples)", 
+line_real, = ax.plot([], [], color="red", label="Real ECG (200 samples/sec)", 
                       linewidth=2, marker='o', markersize=3)
 line_pred, = ax.plot([], [], color="blue", label="Enhanced ECG (LSTM)", 
                      linewidth=1.5, alpha=0.8)
-ax.set_xlabel("Sample index")
+
+# Ajouter des lignes verticales pour marquer les cycles
+for i in range(periodes_a_afficher + 1):
+    ax.axvline(x=i * duree_periode, color='gray', linestyle='--', alpha=0.5, linewidth=0.5)
+
+# Ajouter une ligne horizontale pour le zéro
+ax.axhline(y=0, color='black', linestyle='-', alpha=0.3, linewidth=0.5)
+
+# Ajouter une grille pour faciliter la lecture
+ax.grid(True, alpha=0.2)
+
+ax.set_xlabel("Time (seconds)")
 ax.set_ylabel("Amplitude (mV)")
-ax.set_title("Real-time ECG Enhancement with LSTM Prediction")
-ax.grid(True, alpha=0.3)
-ax.set_xlim(0, BUFFER_SIZE * 2)
-ax.set_ylim(-1, 1)
+ax.set_title(f"Real-time ECG Enhancement with LSTM Prediction ({periodes_a_afficher} cycles = {periodes_a_afficher} seconds)")
+ax.set_xlim(0, duree_periode * periodes_a_afficher)  # De 0 à 5 secondes
+ax.set_ylim(AMPLITUDE_MIN, AMPLITUDE_MAX)  # Échelle d'amplitude constante
 ax.legend(loc='upper right')
 
 # ---------- MQTT Callbacks ----------
@@ -141,23 +166,21 @@ def update_plot(frame):
     with pred_lock:
         current_pred = pred_signal if pred_signal else real_data
     
+    # Calculer le temps pour les données prédites
+    # Les données prédites ont environ 2x plus de points que les données réelles
+    if current_pred:
+        t_pred = np.linspace(0, duree_periode * periodes_a_afficher, len(current_pred))
+    else:
+        t_pred = np.array([])
+    
     # Update plot lines
-    real_x = list(range(len(real_data)))
-    line_real.set_data(real_x, real_data)
+    line_real.set_data(t_buffer[:len(real_data)], real_data)
     
-    enhanced_x = range(len(current_pred))
-    line_pred.set_data(enhanced_x, current_pred)
+    if len(t_pred) > 0 and len(current_pred) > 0:
+        line_pred.set_data(t_pred, current_pred)
     
-    # Auto-adjust axes
-    if current_pred and real_data:
-        max_x = max(len(current_pred), len(real_data))
-        ax.set_xlim(0, max_x)
-        
-        all_data = real_data + current_pred
-        if all_data:
-            y_min, y_max = min(all_data), max(all_data)
-            margin = (y_max - y_min) * 0.15 if (y_max - y_min) > 0 else 0.5
-            ax.set_ylim(y_min - margin, y_max + margin)
+    # L'échelle Y reste constante - pas d'ajustement automatique
+    # L'échelle X reste également constante (0 à 5 secondes)
     
     return line_real, line_pred
 
@@ -171,6 +194,8 @@ try:
     client.connect(MQTT_BROKER, MQTT_PORT, 60)
     client.loop_start()
     print("✓ Connected! Waiting for ECG data...")
+    print(f"Displaying {periodes_a_afficher} cycles ({duree_periode * periodes_a_afficher} seconds)")
+    print(f"Amplitude scale fixed at [{AMPLITUDE_MIN}, {AMPLITUDE_MAX}] mV")
 except Exception as e:
     print(f"✗ Error connecting to MQTT broker: {e}")
     exit(1)
@@ -188,7 +213,7 @@ ani = animation.FuncAnimation(
 try:
     plt.show()
 except KeyboardInterrupt:
-    print("\\n\\nShutting down...")
+    print("\n\nShutting down...")
 finally:
     client.loop_stop()
     client.disconnect()
